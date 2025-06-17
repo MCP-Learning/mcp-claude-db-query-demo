@@ -52,7 +52,7 @@ Configuration
     Replace the placeholders with your actual API keys.
 
 2.  **Database setup:**
-    -   Ensure you have the SQLite database file `farming.db` at the path specified in `db_query_server.py` (default: `/Users/suhailshah/PrivateVault/projects/sandbox/AI playground/MCP/DB Query project/mcp-farming-demo/farming.db`).
+    -   Ensure you have the SQLite database file `farming.db` at the path specified in `db_query_server.py` (default: `/Users/my-name/path/to/the/project/mcp-claude-db-query-demo/mcp-farming-demo/farming.db`).
     -   If the file is missing, create a sample SQLite database with tables `crops` (columns: id, farm_id, type, planting_date) and `farms` (columns: id, name, location), or adjust the path in `db_query_server.py` to match your setup.
 
 Running the Project
