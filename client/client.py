@@ -83,6 +83,8 @@ class MCPClient:
 
     async def process_query(self, query: str) -> str:
         logger.info("Processing query: %s", query)
+        
+        # Fetch available tools from the server
         response = await self.session.list_tools()
         available_tools = [{
             "name": tool.name,
@@ -90,17 +92,27 @@ class MCPClient:
             "input_schema": tool.inputSchema
         } for tool in response.tools]
         logger.info("Available tools raw schemas: %s", available_tools)
+        
+        # Filter and format tools for the Gemini API
         gemini_tools = [{
             "name": tool["name"],
             "description": tool["description"],
             "parameters": self.filter_schema(tool["input_schema"])
         } for tool in available_tools]
         logger.info("Gemini tools filtered schemas: %s", json.dumps(gemini_tools, indent=2))
-        history = [{"role": "user", "parts": [{"text": query}]}]
-        final_text = []
+        
+        # Initialize conversation history with a system message
+        history = [
+            {"role": "model", "parts": [{"text": "I am an assistant that uses tools to answer questions about crops and farms. For any query about a specific crop—like 'how many wheat' (meaning wheat crops) or 'tell me about corn'—I will use the 'get_crop_info' tool to provide details, including counts if asked."}]},
+            {"role": "user", "parts": [{"text": query}]}
+        ]
+        logger.info("Initialized history with refined instruction: %s", history[0]["parts"][0]["text"])
+        
+        final_text = []  # Collect all text parts for the final response
 
         while True:
             try:
+                # Generate content using the Gemini model
                 response = self.model.generate_content(history, tools=gemini_tools)
                 if not response.candidates:
                     logger.error("No candidates in response")
@@ -111,33 +123,69 @@ class MCPClient:
             except Exception as e:
                 logger.exception("Error in generate_content: %s", str(e))
                 raise
+            
+            # Append model content to history
             history.append(model_content)
+            
+            # Check for function calls (tool usage)
             function_calls = [part.function_call for part in model_content.parts if part.function_call]
-            logger.info("Function calls: %s", function_calls)
+            logger.info("Function calls: %s", [fc.name for fc in function_calls] if function_calls else "None")
+
             if not function_calls:
-                break
+                # No tools were called; check for vague 'how many' queries
+                logger.info("No tool called for query: '%s'. Model response: '%s'", query, text_parts)
+                if "how many" in query.lower() and any(crop in query.lower() for crop in ["wheat", "corn"]):
+                    logger.info("Detected 'how many' query with crop type: %s. Forcing tool call.", query)
+                    crop_type = next(crop for crop in ["wheat", "corn"] if crop in query.lower())
+                    result = await self.session.call_tool("get_crop_info", {"crop_type": crop_type})
+                    logger.info("Forced tool call result: content=%s, isError=%s", result.content, result.isError)
+                    if not result.isError:
+                        tool_response_text = result.content.text if hasattr(result.content, 'text') else str(result.content)
+                        crop_count = len([line for line in tool_response_text.split('\n') if line.strip()])
+                        fallback_response = f"There are {crop_count} {crop_type} crops."
+                        final_text.append(fallback_response)
+                        logger.info("Fallback triggered; using response: %s instead of clarification", fallback_response)
+                    else:
+                        final_text.append(f"Error fetching {crop_type} info: {result.content}")
+                        logger.info("Fallback error for crop '%s': %s", crop_type, result.content)
+                else:
+                    # No fallback needed; use the model's response
+                    final_text.extend(text_parts)
+                    logger.info("No fallback triggered; using model response: %s", text_parts)
+                break  # Exit the loop since no tools are being called
+            
+            # Process each tool call
             for function_call in function_calls:
                 tool_name = function_call.name
                 tool_args = dict(function_call.args)
                 logger.info("Calling tool %s with args: %s", tool_name, tool_args)
                 try:
                     result = await self.session.call_tool(tool_name, tool_args)
-                    logger.info("Tool %s result: content=%s, isError=%s", tool_name, result.content, result.isError)
+                    logger.info("Tool %s returned: content=%s, isError=%s", tool_name, str(result.content), result.isError)
                     if result.isError:
                         logger.error("Tool error: %s", result.content)
                         final_text.append(f"Error from tool {tool_name}: {result.content}")
                         break
+                    tool_response_text = result.content.text if hasattr(result.content, 'text') else str(result.content)
+                    logger.info("Extracted tool response text for %s: %s", tool_name, tool_response_text)
+                    if "how many" in query.lower() and tool_name == "get_crop_info":
+                        crop_count = len([line for line in tool_response_text.split('\n') if line.strip()])
+                        response_text = f"There are {crop_count} {tool_args['crop_type']} crops."
+                        logger.info("Processed 'how many' query: %s", response_text)
+                    else:
+                        response_text = tool_response_text
                     history.append({
                         "role": "model",
                         "parts": [{
                             "function_response": {
                                 "name": tool_name,
                                 "response": {
-                                    "content": result.content
+                                    "content": response_text
                                 }
                             }
                         }]
                     })
+                    final_text.append(response_text)
                 except Exception as e:
                     logger.error("Error calling tool %s: %s", tool_name, str(e))
                     raise

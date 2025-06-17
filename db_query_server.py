@@ -19,10 +19,13 @@ def execute_query(query: str, params: tuple = ()) -> list:
 
 @mcp.tool()
 async def get_crop_info(crop_type: str) -> str:
-    """Get information about a specific crop type.
+    """Retrieve detailed information about crops of a specific type, such as wheat or corn. 
+    This includes the number of crops planted, their planting dates, and the farms they are associated with.
+
+    Use this tool for queries like 'how many wheat crops are there?' or 'tell me about corn'.
 
     Args:
-        crop_type: Type of the crop to query (e.g., 'wheat', 'corn')
+        crop_type: The type of crop to query (e.g., 'wheat', 'corn'). This parameter is required.
     """
     query = "SELECT * FROM crops WHERE type = ?"
     results = execute_query(query, (crop_type,))
